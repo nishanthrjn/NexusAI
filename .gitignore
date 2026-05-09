@@ -1,0 +1,7 @@
+bin/
+obj/
+.env
+credentials.json
+*.user
+.vs/
+.idea/

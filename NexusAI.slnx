@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NexusAI.Api/NexusAI.Api.csproj" />
+    <Project Path="src/NexusAI.Core/NexusAI.Core.csproj" />
+    <Project Path="src/NexusAI.Domain/NexusAI.Domain.csproj" />
+    <Project Path="src/NexusAI.Infrastructure/NexusAI.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NexusAI.Tests/NexusAI.Tests.csproj" />
+  </Folder>
+</Solution>
