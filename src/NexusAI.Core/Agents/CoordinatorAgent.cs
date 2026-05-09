@@ -3,6 +3,7 @@ using NexusAI.Domain.Entities;
 using NexusAI.Domain.Enums;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using AgentTypes = NexusAI.Domain.Enums.AgentType;
 
 namespace NexusAI.Core.Agents;
@@ -33,12 +34,13 @@ public class CoordinatorAgent : AgentBase
             - Analysis: analyses data, finds patterns, identifies insights
             - Report: synthesises all findings into a structured final report
 
-            Respond ONLY with a valid JSON array. No markdown, no explanation.
+            IMPORTANT: Respond ONLY with a valid complete JSON array.
+            Keep it to 4 tasks maximum. No markdown, no explanation.
             Use exactly this format:
             [
-              {"agentType": "WebSearch", "title": "...", "description": "...", "order": 1},
-              {"agentType": "Analysis",  "title": "...", "description": "...", "order": 2},
-              {"agentType": "Report",    "title": "...", "description": "...", "order": 3}
+              {"agentType":"WebSearch","title":"...","description":"...","order":1},
+              {"agentType":"Analysis","title":"...","description":"...","order":2},
+              {"agentType":"Report","title":"...","description":"...","order":3}
             ]
             """;
 
@@ -46,29 +48,50 @@ public class CoordinatorAgent : AgentBase
 
         progress.Report($"[Coordinator] Decomposing task: {session.UserPrompt}");
 
-        var json = await CompleteAsync(system, user, progress, ct);
+        var raw = await CompleteAsync(system, user, progress, ct);
 
-        // Strip markdown fences if present
-        json = json.Trim();
+        // Clean markdown fences
+        var json = raw.Trim();
         if (json.StartsWith("```"))
-            json = System.Text.RegularExpressions.Regex
-                .Replace(json, @"```[a-z]*\n?", "").Trim('`').Trim();
+            json = Regex.Replace(json, @"```[a-z]*\n?", "").Trim('`').Trim();
 
-        // Find JSON array — skip any preamble text
+        // Extract JSON array
         var startIdx = json.IndexOf('[');
         var endIdx   = json.LastIndexOf(']');
-        if (startIdx >= 0 && endIdx > startIdx)
+
+        if (startIdx < 0)
+        {
+            progress.Report("[Coordinator] No JSON array found — using default tasks");
+            return GetDefaultTasks(session.Id);
+        }
+
+        // If closing bracket is missing — truncated response — add it
+        if (endIdx < startIdx)
+        {
+            json = json[startIdx..].TrimEnd().TrimEnd(',') + "]";
+        }
+        else
+        {
             json = json[startIdx..(endIdx + 1)];
+        }
 
-        var taskDefs = JsonSerializer.Deserialize<List<TaskDefinition>>(json, _jsonOptions)
-            ?? new List<TaskDefinition>();
+        List<TaskDefinition>? taskDefs = null;
+        try
+        {
+            taskDefs = JsonSerializer.Deserialize<List<TaskDefinition>>(json, _jsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            progress.Report($"[Coordinator] JSON parse error: {ex.Message} — using default tasks");
+            return GetDefaultTasks(session.Id);
+        }
 
-        var tasks = taskDefs
+        var tasks = (taskDefs ?? new List<TaskDefinition>())
             .Where(t => !string.IsNullOrWhiteSpace(t.AgentType))
             .Select(t => new AgentTask
             {
                 SessionId   = session.Id,
-                AgentType   = t.AgentType ?? "Analysis",
+                AgentType   = t.AgentType   ?? "Analysis",
                 Title       = t.Title       ?? "Untitled Task",
                 Description = t.Description ?? t.Title ?? "No description",
                 Order       = t.Order,
@@ -77,9 +100,40 @@ public class CoordinatorAgent : AgentBase
             .OrderBy(t => t.Order)
             .ToList();
 
+        if (!tasks.Any())
+            return GetDefaultTasks(session.Id);
+
+        // Always ensure a Report task at the end
+        if (!tasks.Any(t => t.AgentType == AgentTypes.Report))
+        {
+            tasks.Add(new AgentTask
+            {
+                SessionId   = session.Id,
+                AgentType   = AgentTypes.Report,
+                Title       = "Final Report",
+                Description = "Synthesise all findings into a comprehensive report",
+                Order       = tasks.Max(t => t.Order) + 1,
+                Status      = AgentTaskStatus.Pending
+            });
+        }
+
         progress.Report($"[Coordinator] Created {tasks.Count} subtasks");
         return tasks;
     }
+
+    private List<AgentTask> GetDefaultTasks(Guid sessionId) =>
+        new()
+        {
+            new() { SessionId=sessionId, AgentType=AgentTypes.WebSearch,
+                Title="Research", Description="Research the topic",
+                Order=1, Status=AgentTaskStatus.Pending },
+            new() { SessionId=sessionId, AgentType=AgentTypes.Analysis,
+                Title="Analysis", Description="Analyse the findings",
+                Order=2, Status=AgentTaskStatus.Pending },
+            new() { SessionId=sessionId, AgentType=AgentTypes.Report,
+                Title="Report", Description="Produce the final report",
+                Order=3, Status=AgentTaskStatus.Pending }
+        };
 
     public override Task<string> ExecuteAsync(
         AgentTask task, AgentSession session,

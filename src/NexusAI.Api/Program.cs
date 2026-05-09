@@ -11,42 +11,35 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Configuration ─────────────────────────────────────────────────────────────
-var connectionString   = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? "Host=localhost;Port=5432;Database=nexusai;Username=nexusai;Password=nexusai_dev";
-var ollamaEndpoint     = builder.Configuration["Ollama:Endpoint"]  ?? "http://localhost:11434";
-var ollamaChatModel    = builder.Configuration["Ollama:ChatModel"] ?? "llama3.2";
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? "Host=localhost;Port=5433;Database=nexusai;Username=nexusai;Password=nexusai_dev";
+var ollamaEndpoint  = builder.Configuration["Ollama:Endpoint"]  ?? "http://localhost:11434";
+var ollamaChatModel = builder.Configuration["Ollama:ChatModel"] ?? "llama3.2";
 
-// ── Database ──────────────────────────────────────────────────────────────────
 builder.Services.AddDbContextFactory<NexusAIDbContext>(options =>
     options.UseNpgsql(connectionString));
 
-// ── Semantic Kernel ───────────────────────────────────────────────────────────
+// Set global HttpClient timeout — agents take 2-5 min on CPU
+builder.Services.ConfigureHttpClientDefaults(c =>
+    c.ConfigureHttpClient(h => h.Timeout = TimeSpan.FromMinutes(15)));
+
 #pragma warning disable SKEXP0070
-var kernel = Kernel.CreateBuilder()
-    .AddOllamaChatCompletion(ollamaChatModel, new Uri(ollamaEndpoint))
-    .Build();
+var kernelBuilder = Kernel.CreateBuilder();
+kernelBuilder.AddOllamaChatCompletion(ollamaChatModel, new Uri(ollamaEndpoint));
+var kernel = kernelBuilder.Build();
 #pragma warning restore SKEXP0070
 
 builder.Services.AddSingleton(kernel);
-
-// ── Agents ────────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<CoordinatorAgent>();
 builder.Services.AddSingleton<IAgent, DocumentAgent>();
 builder.Services.AddSingleton<IAgent, WebSearchAgent>();
 builder.Services.AddSingleton<IAgent, AnalysisAgent>();
 builder.Services.AddSingleton<IAgent, ReportAgent>();
 builder.Services.AddSingleton<IAgentFactory, AgentFactory>();
-
-// ── Repositories ──────────────────────────────────────────────────────────────
 builder.Services.AddScoped<IAgentSessionRepository, AgentSessionRepository>();
 builder.Services.AddScoped<IAgentTaskRepository,    AgentTaskRepository>();
 builder.Services.AddScoped<IMessageRepository,      MessageRepository>();
-
-// ── Orchestrator ──────────────────────────────────────────────────────────────
 builder.Services.AddScoped<IOrchestrator, OrchestratorService>();
-
-// ── API + SignalR ─────────────────────────────────────────────────────────────
 builder.Services.AddSignalR();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
@@ -55,7 +48,6 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 
 var app = builder.Build();
 
-// ── Migrations ────────────────────────────────────────────────────────────────
 using (var scope = app.Services.CreateScope())
 {
     var factory = scope.ServiceProvider
@@ -64,7 +56,6 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
 }
 
-// ── Middleware ────────────────────────────────────────────────────────────────
 app.UseCors();
 app.MapOpenApi();
 app.MapScalarApiReference(options =>
@@ -72,11 +63,7 @@ app.MapScalarApiReference(options =>
     options.Title = "NexusAI API";
     options.Theme = ScalarTheme.DeepSpace;
 });
-
-// ── SignalR Hub ───────────────────────────────────────────────────────────────
 app.MapHub<AgentHub>("/hubs/agent");
-
-// ── Endpoints ─────────────────────────────────────────────────────────────────
 
 app.MapGet("/health", () => new
 {
@@ -86,7 +73,6 @@ app.MapGet("/health", () => new
     Version = "1.0.0"
 }).WithName("GetHealth").WithTags("System");
 
-// POST /api/sessions — start a new agent session
 app.MapPost("/api/sessions", async (
     StartSessionRequest request,
     IOrchestrator       orchestrator,
@@ -96,7 +82,6 @@ app.MapPost("/api/sessions", async (
         return Results.BadRequest(new { Error = "Prompt cannot be empty" });
 
     var sessionId = await orchestrator.StartSessionAsync(request.Prompt, ct);
-
     return Results.Accepted($"/api/sessions/{sessionId}", new
     {
         SessionId = sessionId,
@@ -106,10 +91,8 @@ app.MapPost("/api/sessions", async (
     });
 }).WithName("StartSession").WithTags("Sessions");
 
-// GET /api/sessions — list recent sessions
 app.MapGet("/api/sessions", async (
-    IAgentSessionRepository repo,
-    CancellationToken       ct) =>
+    IAgentSessionRepository repo, CancellationToken ct) =>
 {
     var sessions = await repo.GetRecentAsync(20, ct);
     return Results.Ok(sessions.Select(s => new
@@ -120,11 +103,8 @@ app.MapGet("/api/sessions", async (
     }));
 }).WithName("GetSessions").WithTags("Sessions");
 
-// GET /api/sessions/{id} — get session with all tasks and results
 app.MapGet("/api/sessions/{id:guid}", async (
-    Guid                    id,
-    IAgentSessionRepository repo,
-    CancellationToken       ct) =>
+    Guid id, IAgentSessionRepository repo, CancellationToken ct) =>
 {
     var session = await repo.GetByIdAsync(id, ct);
     if (session is null)
@@ -132,29 +112,20 @@ app.MapGet("/api/sessions/{id:guid}", async (
 
     return Results.Ok(new
     {
-        session.Id,
-        session.Status,
-        session.UserPrompt,
-        session.CreatedAt,
-        session.CompletedAt,
+        session.Id, session.Status, session.UserPrompt,
+        session.CreatedAt, session.CompletedAt,
         session.FinalReport,
         Tasks = session.Tasks.Select(t => new
         {
-            t.Id, t.AgentType, t.Title,
-            t.Status, t.Order,
+            t.Id, t.AgentType, t.Title, t.Status, t.Order,
             t.CreatedAt, t.CompletedAt,
-            HasResult = t.Result != null,
-            t.Error
+            HasResult = t.Result != null, t.Error
         })
     });
 }).WithName("GetSession").WithTags("Sessions");
 
-// GET /api/sessions/{id}/tasks/{taskId} — get full task result
 app.MapGet("/api/sessions/{id:guid}/tasks/{taskId:guid}", async (
-    Guid                    id,
-    Guid                    taskId,
-    IAgentSessionRepository repo,
-    CancellationToken       ct) =>
+    Guid id, Guid taskId, IAgentSessionRepository repo, CancellationToken ct) =>
 {
     var session = await repo.GetByIdAsync(id, ct);
     if (session is null)
@@ -166,9 +137,8 @@ app.MapGet("/api/sessions/{id:guid}/tasks/{taskId:guid}", async (
 
     return Results.Ok(new
     {
-        task.Id, task.AgentType, task.Title,
-        task.Description, task.Status,
-        task.Result, task.Error,
+        task.Id, task.AgentType, task.Title, task.Description,
+        task.Status, task.Result, task.Error,
         task.CreatedAt, task.CompletedAt
     });
 }).WithName("GetTaskResult").WithTags("Sessions");
