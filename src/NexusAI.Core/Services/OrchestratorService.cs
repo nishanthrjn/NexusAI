@@ -32,10 +32,8 @@ public class OrchestratorService : IOrchestrator
         _logger      = logger;
     }
 
-    public async Task<Guid> StartSessionAsync(
-        string userPrompt, CancellationToken ct)
+    public async Task<Guid> StartSessionAsync(string userPrompt, CancellationToken ct)
     {
-        // 1. Create session
         var session = new AgentSession
         {
             UserPrompt = userPrompt,
@@ -44,8 +42,9 @@ public class OrchestratorService : IOrchestrator
         await _sessionRepo.CreateAsync(session, ct);
         _logger.LogInformation("Session {Id} started: {Prompt}", session.Id, userPrompt);
 
-        // 2. Run in background — return session ID immediately
-        _ = Task.Run(() => RunSessionAsync(session, ct), ct);
+        // Use CancellationToken.None so the background task is not cancelled
+        // when the HTTP request completes
+        _ = Task.Run(() => RunSessionAsync(session, CancellationToken.None));
 
         return session.Id;
     }
@@ -54,20 +53,17 @@ public class OrchestratorService : IOrchestrator
     {
         try
         {
-            // 3. Coordinator decomposes the task
             var progress = new Progress<string>(msg =>
                 _logger.LogInformation("[{Session}] {Message}", session.Id, msg));
 
             var tasks = await _coordinator.DecomposeAsync(session, progress, ct);
 
-            // 4. Save tasks to database
             foreach (var task in tasks)
             {
                 await _taskRepo.CreateAsync(task, ct);
                 session.Tasks.Add(task);
             }
 
-            // 5. Execute each task in order
             foreach (var task in tasks.OrderBy(t => t.Order))
             {
                 task.Status = AgentTaskStatus.Running;
@@ -82,7 +78,6 @@ public class OrchestratorService : IOrchestrator
                     task.Result      = result;
                     task.CompletedAt = DateTime.UtcNow;
 
-                    // Save message to conversation history
                     await _messageRepo.AddAsync(new AgentMessage
                     {
                         SessionId = session.Id,
@@ -102,7 +97,6 @@ public class OrchestratorService : IOrchestrator
                 await _taskRepo.UpdateAsync(task, ct);
             }
 
-            // 6. Mark session complete
             session.Status      = "Completed";
             session.CompletedAt = DateTime.UtcNow;
             session.FinalReport = session.Tasks

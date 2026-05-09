@@ -2,6 +2,7 @@ using Microsoft.SemanticKernel;
 using NexusAI.Domain.Entities;
 using NexusAI.Domain.Enums;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentTypes = NexusAI.Domain.Enums.AgentType;
 
 namespace NexusAI.Core.Agents;
@@ -9,6 +10,11 @@ namespace NexusAI.Core.Agents;
 public class CoordinatorAgent : AgentBase
 {
     public override string AgentType => AgentTypes.Coordinator;
+
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public CoordinatorAgent(Kernel kernel) : base(kernel) { }
 
@@ -18,21 +24,21 @@ public class CoordinatorAgent : AgentBase
         CancellationToken ct)
     {
         var system = """
-            You are an expert task coordinator. Your job is to break down a complex
-            user request into a sequence of specialist subtasks.
+            You are an expert task coordinator. Break down the user request
+            into a sequence of specialist subtasks.
 
             Available agents:
             - Document: reads and extracts information from uploaded documents
             - WebSearch: searches the web for current information
-            - Analysis: analyses data, finds patterns, and identifies insights
+            - Analysis: analyses data, finds patterns, identifies insights
             - Report: synthesises all findings into a structured final report
 
             Respond ONLY with a valid JSON array. No markdown, no explanation.
-            Format:
+            Use exactly this format:
             [
-              {"agentType": "Document", "title": "...", "description": "...", "order": 1},
-              {"agentType": "Analysis", "title": "...", "description": "...", "order": 2},
-              {"agentType": "Report",   "title": "...", "description": "...", "order": 3}
+              {"agentType": "WebSearch", "title": "...", "description": "...", "order": 1},
+              {"agentType": "Analysis",  "title": "...", "description": "...", "order": 2},
+              {"agentType": "Report",    "title": "...", "description": "...", "order": 3}
             ]
             """;
 
@@ -42,22 +48,34 @@ public class CoordinatorAgent : AgentBase
 
         var json = await CompleteAsync(system, user, progress, ct);
 
+        // Strip markdown fences if present
         json = json.Trim();
-        if (json.StartsWith("```")) json = System.Text.RegularExpressions.Regex
-            .Replace(json, @"```[a-z]*\n?", "").Trim('`').Trim();
+        if (json.StartsWith("```"))
+            json = System.Text.RegularExpressions.Regex
+                .Replace(json, @"```[a-z]*\n?", "").Trim('`').Trim();
 
-        var taskDefs = JsonSerializer.Deserialize<List<TaskDefinition>>(json)
+        // Find JSON array — skip any preamble text
+        var startIdx = json.IndexOf('[');
+        var endIdx   = json.LastIndexOf(']');
+        if (startIdx >= 0 && endIdx > startIdx)
+            json = json[startIdx..(endIdx + 1)];
+
+        var taskDefs = JsonSerializer.Deserialize<List<TaskDefinition>>(json, _jsonOptions)
             ?? new List<TaskDefinition>();
 
-        var tasks = taskDefs.Select(t => new AgentTask
-        {
-            SessionId   = session.Id,
-            AgentType   = t.AgentType,
-            Title       = t.Title,
-            Description = t.Description,
-            Order       = t.Order,
-            Status      = AgentTaskStatus.Pending
-        }).OrderBy(t => t.Order).ToList();
+        var tasks = taskDefs
+            .Where(t => !string.IsNullOrWhiteSpace(t.AgentType))
+            .Select(t => new AgentTask
+            {
+                SessionId   = session.Id,
+                AgentType   = t.AgentType ?? "Analysis",
+                Title       = t.Title       ?? "Untitled Task",
+                Description = t.Description ?? t.Title ?? "No description",
+                Order       = t.Order,
+                Status      = AgentTaskStatus.Pending
+            })
+            .OrderBy(t => t.Order)
+            .ToList();
 
         progress.Report($"[Coordinator] Created {tasks.Count} subtasks");
         return tasks;
@@ -69,5 +87,8 @@ public class CoordinatorAgent : AgentBase
         => Task.FromResult("Coordinator does not execute tasks directly.");
 
     private record TaskDefinition(
-        string AgentType, string Title, string Description, int Order);
+        [property: JsonPropertyName("agentType")]   string?  AgentType,
+        [property: JsonPropertyName("title")]        string?  Title,
+        [property: JsonPropertyName("description")]  string?  Description,
+        [property: JsonPropertyName("order")]        int      Order);
 }
