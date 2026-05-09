@@ -11,7 +11,7 @@
 ---
 
 ## Architecture
-
+```text
 User Prompt (POST /api/sessions)
 ↓
 CoordinatorAgent — decomposes into specialist subtasks
@@ -31,7 +31,7 @@ Structured final report with citations
 ↓
 PostgreSQL — full audit trail of every agent decision
 SignalR — streams live agent output to browser
-
+```
 ## Key Features
 
 - **Multi-agent orchestration** — Coordinator decomposes complex prompts intelligently
@@ -42,7 +42,7 @@ SignalR — streams live agent output to browser
 - **Production-ready** — Polly retry, structured logging, EF Core migrations, CI
 
 ## Tech Stack
-
+```text
 | Layer | Technology |
 |-------|-----------|
 | Language | C# 12 / .NET 10 |
@@ -53,7 +53,7 @@ SignalR — streams live agent output to browser
 | API | ASP.NET Core Minimal API + Scalar UI |
 | Testing | xUnit — 7 tests |
 | CI | GitHub Actions |
-
+```
 ## Getting Started
 
 ### Prerequisites
@@ -95,7 +95,7 @@ curl http://localhost:5000/api/sessions/{sessionId}/tasks/{taskId}
 Scalar UI: `http://localhost:5000/scalar/v1`
 
 ## Project Structure
-
+```text
 NexusAI/
 ├── src/
 │   ├── NexusAI.Domain/          — Entities, interfaces, enums
@@ -108,14 +108,7 @@ NexusAI/
 │   └── NexusAI.Tests/           — 7 xUnit tests
 └── infra/
 └── docker-compose.yml       — PostgreSQL on port 5433
-
-## Portfolio Context
-
-Built as part of a portfolio demonstrating AI engineering capabilities:
-
-- **AutoFlow** — Industrial IoT workflow automation (C# / .NET)
-- **DocuMind** — AI document intelligence RAG platform (C# / Semantic Kernel)
-- **NexusAI** — Multi-agent AI orchestration (this project)
+```
 
 ## Author
 
