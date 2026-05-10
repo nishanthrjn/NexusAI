@@ -24,7 +24,6 @@ public abstract class AgentBase : IAgent
         IProgress<string> progress,
         CancellationToken ct);
 
-    // Helper — sends a prompt and returns the full response
     protected async Task<string> CompleteAsync(
         string systemPrompt,
         string userMessage,
@@ -35,15 +34,17 @@ public abstract class AgentBase : IAgent
         history.AddSystemMessage(systemPrompt);
         history.AddUserMessage(userMessage);
 
+        // Use a long-lived CancellationToken independent of the request
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(14));
+
         var response = await _chat.GetChatMessageContentAsync(
-            history, cancellationToken: ct);
+            history, cancellationToken: cts.Token);
 
         var result = response.Content ?? string.Empty;
         progress.Report(result);
         return result;
     }
 
-    // Helper — streams response token by token
     protected async Task<string> StreamCompleteAsync(
         string systemPrompt,
         string userMessage,
@@ -56,8 +57,11 @@ public abstract class AgentBase : IAgent
 
         var fullResponse = new System.Text.StringBuilder();
 
+        // Use a long-lived CancellationToken independent of the request
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(14));
+
         await foreach (var chunk in _chat.GetStreamingChatMessageContentsAsync(
-            history, cancellationToken: ct))
+            history, cancellationToken: cts.Token))
         {
             if (!string.IsNullOrEmpty(chunk.Content))
             {

@@ -177,7 +177,8 @@
     {
         _pollTimer?.Dispose();
         _pollTimer = new System.Timers.Timer(3000);
-        _pollTimer.Elapsed += async (_, _) => await PollSession(sessionId);
+        _pollTimer.Elapsed += (_, _) => InvokeAsync(() => PollSession(sessionId));
+        _pollTimer.AutoReset = true;
         _pollTimer.Start();
     }
 

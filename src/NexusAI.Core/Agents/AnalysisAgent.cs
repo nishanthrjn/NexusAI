@@ -21,35 +21,29 @@ public class AnalysisAgent : AgentBase
 
         var previousResults = session.Tasks
             .Where(t => t.Order < task.Order && t.Result != null)
-            .Select(t => $"[{t.AgentType}] {t.Title}:\n{t.Result}")
+            .Select(t => $"[{t.AgentType}]:\n{Truncate(t.Result!, 1000)}")
             .ToList();
 
         var context = previousResults.Any()
             ? string.Join("\n\n", previousResults)
-            : "No previous results available.";
+            : "No previous results.";
 
         var system = """
-            You are an expert data analyst. Analyse the provided information
-            and extract key insights, patterns, risks, and opportunities.
-            Be specific and cite evidence from the provided context.
-            Structure your response with clear sections and bullet points.
+            You are a data analyst. Analyse the provided information briefly.
+            Be concise — maximum 300 words. Focus only on key insights.
             """;
 
         var user = $"""
             Task: {task.Description}
-
-            Context from previous agents:
-            {context}
-
-            Provide a detailed analysis with:
-            1. Key findings
-            2. Identified risks or opportunities
-            3. Supporting evidence
-            4. Confidence level for each finding
+            Context: {context}
+            Provide: 3 key findings, 2 risks or opportunities, confidence level.
             """;
 
         var result = await StreamCompleteAsync(system, user, progress, ct);
         progress.Report($"[Analysis] Complete");
         return result;
     }
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "...";
 }

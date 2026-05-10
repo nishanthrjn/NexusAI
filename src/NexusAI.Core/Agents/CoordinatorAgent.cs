@@ -62,7 +62,7 @@ public class CoordinatorAgent : AgentBase
         if (startIdx < 0)
         {
             progress.Report("[Coordinator] No JSON array found — using default tasks");
-            return GetDefaultTasks(session.Id);
+            return GetDefaultTasks(session.Id, session.UserPrompt);
         }
 
         // If closing bracket is missing — truncated response — add it
@@ -83,7 +83,7 @@ public class CoordinatorAgent : AgentBase
         catch (JsonException ex)
         {
             progress.Report($"[Coordinator] JSON parse error: {ex.Message} — using default tasks");
-            return GetDefaultTasks(session.Id);
+            return GetDefaultTasks(session.Id, session.UserPrompt);
         }
 
         var tasks = (taskDefs ?? new List<TaskDefinition>())
@@ -101,7 +101,7 @@ public class CoordinatorAgent : AgentBase
             .ToList();
 
         if (!tasks.Any())
-            return GetDefaultTasks(session.Id);
+            return GetDefaultTasks(session.Id, session.UserPrompt);
 
         // Always ensure a Report task at the end
         if (!tasks.Any(t => t.AgentType == AgentTypes.Report))
@@ -121,17 +121,17 @@ public class CoordinatorAgent : AgentBase
         return tasks;
     }
 
-    private List<AgentTask> GetDefaultTasks(Guid sessionId) =>
+    private List<AgentTask> GetDefaultTasks(Guid sessionId, string userPrompt = "") =>
         new()
         {
             new() { SessionId=sessionId, AgentType=AgentTypes.WebSearch,
-                Title="Research", Description="Research the topic",
+                Title="Research", Description=$"Research information about: {userPrompt}",
                 Order=1, Status=AgentTaskStatus.Pending },
             new() { SessionId=sessionId, AgentType=AgentTypes.Analysis,
-                Title="Analysis", Description="Analyse the findings",
+                Title="Analysis", Description=$"Analyse findings related to: {userPrompt}",
                 Order=2, Status=AgentTaskStatus.Pending },
             new() { SessionId=sessionId, AgentType=AgentTypes.Report,
-                Title="Report", Description="Produce the final report",
+                Title="Report", Description=$"Produce a comprehensive report answering: {userPrompt}",
                 Order=3, Status=AgentTaskStatus.Pending }
         };
 

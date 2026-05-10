@@ -21,36 +21,27 @@ public class ReportAgent : AgentBase
 
         var allResults = session.Tasks
             .Where(t => t.AgentType != AgentTypes.Report && t.Result != null)
-            .Select(t => $"## {t.AgentType} Agent — {t.Title}\n\n{t.Result}")
+            .Select(t => $"## {t.AgentType}\n{Truncate(t.Result!, 800)}")
             .ToList();
 
-        var context = string.Join("\n\n---\n\n", allResults);
+        var context = string.Join("\n\n", allResults);
 
         var system = """
-            You are an expert report writer. Synthesise all provided research
-            and analysis into a clear, professional, structured report.
-            Use markdown formatting with proper headings, bullet points, and sections.
-            Every claim must be supported by the provided evidence.
-            End with a clear, actionable executive summary.
+            You are a report writer. Write a clear, structured markdown report.
+            Be concise — maximum 400 words total.
             """;
 
         var user = $"""
             Original request: {session.UserPrompt}
-
-            Findings from all agents:
-            {context}
-
-            Write a comprehensive report with:
-            # Executive Summary
-            # Key Findings
-            # Detailed Analysis
-            # Risks and Opportunities
-            # Recommendations
-            # Sources and Evidence
+            Findings: {context}
+            Write a report with: Executive Summary, Key Findings, Recommendations.
             """;
 
         var result = await StreamCompleteAsync(system, user, progress, ct);
-        progress.Report($"[Report] Final report ready");
+        progress.Report($"[Report] Complete");
         return result;
     }
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "...";
 }

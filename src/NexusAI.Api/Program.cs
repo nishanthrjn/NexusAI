@@ -19,14 +19,22 @@ var ollamaChatModel = builder.Configuration["Ollama:ChatModel"] ?? "llama3.2";
 builder.Services.AddDbContextFactory<NexusAIDbContext>(options =>
     options.UseNpgsql(connectionString));
 
-// Set global HttpClient timeout — agents take 2-5 min on CPU
-builder.Services.ConfigureHttpClientDefaults(c =>
-    c.ConfigureHttpClient(h => h.Timeout = TimeSpan.FromMinutes(15)));
+// Register named HttpClient that Semantic Kernel/OllamaSharp picks up
+builder.Services.AddHttpClient("ollama")
+    .ConfigureHttpClient(c =>
+    {
+        c.BaseAddress = new Uri(ollamaEndpoint);
+        c.Timeout     = TimeSpan.FromMinutes(15);
+    });
+
+// Also set the default to cover all HttpClients
+builder.Services.ConfigureHttpClientDefaults(b =>
+    b.ConfigureHttpClient(c => c.Timeout = TimeSpan.FromMinutes(15)));
 
 #pragma warning disable SKEXP0070
-var kernelBuilder = Kernel.CreateBuilder();
-kernelBuilder.AddOllamaChatCompletion(ollamaChatModel, new Uri(ollamaEndpoint));
-var kernel = kernelBuilder.Build();
+var kernel = Kernel.CreateBuilder()
+    .AddOllamaChatCompletion(ollamaChatModel, new Uri(ollamaEndpoint))
+    .Build();
 #pragma warning restore SKEXP0070
 
 builder.Services.AddSingleton(kernel);
