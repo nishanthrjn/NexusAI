@@ -1,0 +1,284 @@
+@page "/"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Nav
+@implements IAsyncDisposable
+
+<PageTitle>NexusAI</PageTitle>
+
+<div class="nexus-app">
+
+    <div class="nexus-header">
+        <div class="nexus-logo">
+            <span class="logo-icon">⬡</span>
+            <span class="logo-text">NexusAI</span>
+        </div>
+        <div class="nexus-subtitle">Enterprise Multi-Agent Orchestration</div>
+    </div>
+
+    <div class="prompt-section">
+        <div class="prompt-box">
+            <textarea @bind="_prompt" @bind:event="oninput"
+                      placeholder="Ask anything complex — NexusAI will deploy specialist agents to research, analyse, and synthesise a complete answer..."
+                      disabled="@_isRunning"
+                      rows="3"></textarea>
+            <button class="run-btn @(_isRunning ? "running" : "")"
+                    @onclick="StartSession"
+                    disabled="@(_isRunning || string.IsNullOrWhiteSpace(_prompt))">
+                @if (_isRunning)
+                {
+                    <span class="spinner"></span>
+                    <span>Agents Working...</span>
+                }
+                else
+                {
+                    <span>⚡ Deploy Agents</span>
+                }
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(_sessionId))
+        {
+            <div class="session-id">Session: @_sessionId</div>
+        }
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div style="color:#f76a6a;font-size:0.85rem;margin-top:8px;">@_error</div>
+        }
+    </div>
+
+    @if (_tasks.Any())
+    {
+        <div class="pipeline-section">
+            <div class="pipeline-title">Agent Pipeline</div>
+            <div class="pipeline-steps">
+                @foreach (var task in _tasks.OrderBy(t => t.Order))
+                {
+                    <div class="pipeline-step @GetStepClass(task.Status)">
+                        <div class="step-icon">@GetAgentIcon(task.AgentType)</div>
+                        <div class="step-info">
+                            <div class="step-agent">@task.AgentType</div>
+                            <div class="step-title">@task.Title</div>
+                        </div>
+                        <div class="step-status">@GetStatusIcon(task.Status)</div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(_finalReport))
+    {
+        <div class="report-section">
+            <div class="report-header">
+                <span class="report-icon">📋</span>
+                <span class="report-title">Final Report</span>
+                <span class="report-badge">AI Generated</span>
+            </div>
+            <div class="report-body">
+                @((MarkupString)RenderMarkdown(_finalReport))
+            </div>
+        </div>
+    }
+
+    @if (_sessions.Any())
+    {
+        <div class="history-section">
+            <div class="history-title">Recent Sessions</div>
+            <div class="history-list">
+                @foreach (var s in _sessions)
+                {
+                    <div class="history-item @(s.Id == _sessionId ? "active" : "")"
+                         @onclick="() => LoadSession(s.Id)">
+                        <div class="history-prompt">@TruncatePrompt(s.UserPrompt)</div>
+                        <div class="history-meta">
+                            <span class="history-status @s.Status.ToLower()">@s.Status</span>
+                            <span class="history-time">@s.CreatedAt.ToString("dd MMM HH:mm")</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+</div>
+
+@code {
+    private string _prompt      = "";
+    private string _sessionId   = "";
+    private string _finalReport = "";
+    private string _error       = "";
+    private bool   _isRunning   = false;
+    private List<AgentTaskSummary> _tasks    = new();
+    private List<SessionSummary>   _sessions = new();
+
+    private HubConnection? _hub;
+    private HttpClient     _http = new() { BaseAddress = new Uri("http://localhost:5000") };
+    private System.Timers.Timer? _pollTimer;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await LoadSessions();
+    }
+
+    private async Task StartSession()
+    {
+        if (string.IsNullOrWhiteSpace(_prompt) || _isRunning) return;
+
+        _isRunning   = true;
+        _finalReport = "";
+        _tasks       = new();
+        _error       = "";
+
+        try
+        {
+            var resp = await _http.PostAsJsonAsync("/api/sessions",
+                new { prompt = _prompt });
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _error     = $"API error: {resp.StatusCode}";
+                _isRunning = false;
+                return;
+            }
+
+            var body   = await resp.Content.ReadFromJsonAsync<SessionStarted>();
+            _sessionId = body?.SessionId ?? "";
+            _prompt    = "";
+
+            await ConnectSignalR(_sessionId);
+            StartPolling(_sessionId);
+        }
+        catch (Exception ex)
+        {
+            _error     = $"Could not reach API: {ex.Message}";
+            _isRunning = false;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task ConnectSignalR(string sessionId)
+    {
+        try
+        {
+            _hub = new HubConnectionBuilder()
+                .WithUrl("http://localhost:5000/hubs/agent")
+                .WithAutomaticReconnect()
+                .Build();
+
+            await _hub.StartAsync();
+            await _hub.InvokeAsync("JoinSession", sessionId);
+        }
+        catch { /* SignalR optional — polling will still work */ }
+    }
+
+    private void StartPolling(string sessionId)
+    {
+        _pollTimer?.Dispose();
+        _pollTimer = new System.Timers.Timer(3000);
+        _pollTimer.Elapsed += async (_, _) => await PollSession(sessionId);
+        _pollTimer.Start();
+    }
+
+    private async Task PollSession(string sessionId)
+    {
+        try
+        {
+            var session = await _http.GetFromJsonAsync<SessionDetail>(
+                $"/api/sessions/{sessionId}");
+
+            if (session == null) return;
+
+            _tasks = session.Tasks ?? new();
+
+            if (session.Status is "Completed" or "Failed")
+            {
+                _finalReport = session.FinalReport ?? "";
+                _isRunning   = false;
+                _pollTimer?.Stop();
+                await LoadSessions();
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
+    }
+
+    private async Task LoadSessions()
+    {
+        try
+        {
+            _sessions = await _http.GetFromJsonAsync<List<SessionSummary>>(
+                "/api/sessions") ?? new();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
+    }
+
+    private async Task LoadSession(string id)
+    {
+        try
+        {
+            var session = await _http.GetFromJsonAsync<SessionDetail>(
+                $"/api/sessions/{id}");
+
+            if (session == null) return;
+
+            _sessionId   = id;
+            _tasks       = session.Tasks ?? new();
+            _finalReport = session.FinalReport ?? "";
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
+    }
+
+    private string RenderMarkdown(string md)
+    {
+        try { return Markdig.Markdown.ToHtml(md); }
+        catch { return md; }
+    }
+
+    private string GetStepClass(string status) => status switch
+    {
+        "Running"   => "running",
+        "Completed" => "completed",
+        "Failed"    => "failed",
+        _           => "pending"
+    };
+
+    private string GetStatusIcon(string status) => status switch
+    {
+        "Running"   => "⟳",
+        "Completed" => "✓",
+        "Failed"    => "✗",
+        _           => "○"
+    };
+
+    private string GetAgentIcon(string agentType) => agentType switch
+    {
+        "Coordinator" => "⬡",
+        "WebSearch"   => "🔍",
+        "Document"    => "📄",
+        "Analysis"    => "📊",
+        "Report"      => "📋",
+        _             => "◆"
+    };
+
+    private string TruncatePrompt(string p) =>
+        p.Length > 60 ? p[..60] + "..." : p;
+
+    public async ValueTask DisposeAsync()
+    {
+        _pollTimer?.Dispose();
+        if (_hub != null) await _hub.DisposeAsync();
+        _http.Dispose();
+    }
+
+    record SessionStarted(string SessionId, string Status);
+    record SessionDetail(string Id, string Status, string? FinalReport,
+        string UserPrompt, DateTime CreatedAt, List<AgentTaskSummary>? Tasks);
+    record SessionSummary(string Id, string Status, string UserPrompt, DateTime CreatedAt);
+    record AgentTaskSummary(string Id, string AgentType, string Title,
+        string Status, int Order, bool HasResult, string? Error);
+}

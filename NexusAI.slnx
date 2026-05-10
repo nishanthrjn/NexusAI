@@ -4,6 +4,7 @@
     <Project Path="src/NexusAI.Core/NexusAI.Core.csproj" />
     <Project Path="src/NexusAI.Domain/NexusAI.Domain.csproj" />
     <Project Path="src/NexusAI.Infrastructure/NexusAI.Infrastructure.csproj" />
+    <Project Path="src/NexusAI.Web/NexusAI.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/NexusAI.Tests/NexusAI.Tests.csproj" />
