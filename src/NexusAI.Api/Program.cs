@@ -1,3 +1,4 @@
+using OpenTelemetry.Trace;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.SemanticKernel;
 using NexusAI.Api.Hubs;
@@ -53,6 +54,14 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+
+// OpenTelemetry — traces every agent session, HTTP call, and DB query
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddSource("NexusAI")
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddConsoleExporter());
 
 var app = builder.Build();
 
